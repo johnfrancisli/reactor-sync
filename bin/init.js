@@ -10,6 +10,7 @@ async function writeToFile(path, outputData) {
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 const prompt = (query) => new Promise((resolve) => rl.question(query, resolve));
 const REACTOR_API_URL = 'https://reactor.adobe.io/';
+
 async function tryToValidateSettings(args, path) {
   try {
     checkArgs(args);
@@ -20,7 +21,7 @@ async function tryToValidateSettings(args, path) {
     } else if (e.message.includes('"environment"')) {
       await writeToFile(path, async (input) => {
         const current = JSON.parse(input);
-        const reactorUrl = await prompt(`Reactor API Url (Default: ${REACTOR_API_URL}`);
+        const reactorUrl = await prompt(`Reactor API Url (Default: ${REACTOR_API_URL}): `);
         current['environment'] = {
           reactorUrl: reactorUrl === '' ? REACTOR_API_URL : reactorUrl,
         };
@@ -39,36 +40,43 @@ async function tryToValidateSettings(args, path) {
 }
 
 async function initializeProperty(path) {
-  const propertyId = await prompt('What is the id of the property you wish to sync?');
-  if (propertyId === '') {
-    throw new Error('Property ID is required to know which launch to sync');
-  }
+  // Function to prompt and validate required settings
+  const promptForRequiredSetting = async (settingName) => {
+    const value = await prompt(`${settingName}: `);
+    if (!value) {
+      throw new Error(`${settingName} is required`);
+    }
+    return value;
+  };
 
+  // Prompting for required settings
+  const accessToken = await promptForRequiredSetting('Access Token');
+  const clientId = await promptForRequiredSetting('Client ID');
+  const clientSecret = await promptForRequiredSetting('Client Secret');
+  const propertyId = await promptForRequiredSetting('Launch Property ID');
+
+  // Create property directory and subdirectories
   const propertyPath = resolve(process.cwd(), propertyId);
-  try {
-    await access(propertyPath);
-  } catch (e) {
-    await mkdir(propertyPath);
-  }
-  
-  const directories = ['data_elements','environments','extensions','rule_components','rules'];
-  await Promise.all(directories.map((dir) => {
-    return mkdir(resolve(propertyPath, dir)).catch((e) => {
-      if (e.code === 'EEXIST') {
-        return true;
-      }
+  const directories = ['data_elements', 'environments', 'extensions', 'rule_components', 'rules'];
 
-      throw e;
-    });
-  }));
-  console.log('Made');
+  // Ensure all directories exist, including the property directory
+  await mkdir(propertyPath, { recursive: true });
+  await Promise.all(directories.map(dir => mkdir(resolve(propertyPath, dir), { recursive: true })));
 
+  console.log('Directories created & .reactor-settings.json created. Ready to sync.');
+
+  // Update and write settings to the file
   return writeToFile(path, (input) => {
-    const current = JSON.parse(input);
-    current['propertyId'] = propertyId;
-    return JSON.stringify(current);
+    const current = JSON.parse(input) || {};
+    Object.assign(current, {
+      propertyId: propertyId,
+      accessToken: accessToken,
+      integration: { clientId, clientSecret }
+    });
+    return JSON.stringify(current, null, 2); // formatted JSON for readability
   });
 }
+
 
 module.exports = async (args) => {
   const oldConsoleError = console.error;
@@ -78,9 +86,9 @@ module.exports = async (args) => {
   };
   const path = args.settings === undefined ? resolve(process.cwd(), '.reactor-settings.json') : args.settings;
   return tryToValidateSettings(args, path)
-  .then(() => initializeProperty(path))
-  .finally(() => {
-    console.error = oldConsoleError;
-    rl.close();
-  });
+      .then(() => initializeProperty(path))
+      .finally(() => {
+        console.error = oldConsoleError;
+        rl.close();
+      });
 };
